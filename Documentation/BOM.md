@@ -20,3 +20,9 @@ AS3360
 TL072 x2
 BAT54 x2
 1N4148 x2
+
+Si noise, remplacer par :
+https://www.mouser.fr/ProductDetail/Analog-Devices/OP275GPZ?qs=WIvQP4zGanhBjWhdN34Npg%3D%3D
+
+https://os.mbed.com/forum/mbed/topic/1866/?page=1#comment-9285
+https://os.mbed.com/users/chris/notebook/Getting-best-ADC-performance/

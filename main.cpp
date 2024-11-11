@@ -28,18 +28,23 @@
 #define LEFT_SILDER_ADJ             50 // Pour ajuster le point où le plateau recouvre tout à gauche (dépend des valeurs absolues)
 #define RIGHT_SILDER_ADJ            50
 
-//SoftPWM                           led(LED1);
+SoftPWM                             led(LED1);  // TO COMMENT
 AnalogIn                            cv_input(A6); // CV input
 AnalogIn                            slider_input(A2); // SLIDER input
+AnalogIn                            center_input(D3); // POT CENTER input
 AnalogIn                            left_input(A1); // POT R Left input
 AnalogIn                            right_input(A0); // POT L Left input
-//AnalogOut                         raw_output(PA_4); // DAC 1
+//AnalogOut                         raw_output(PA_4); // DAC 1  // TO COMMENT
 AnalogOut                           filtered_output(PA_5); // DAC 2
+
+DigitalIn                           but_r_lin_log(PB_5); // Lin/Log algo to R depth
+DigitalIn                           but_l_lin_log(PB_4); // Lin/Log algo to L depth
 
 // Exponentially Weighted Moving Average filter
 // https://github.com/jonnieZG/EWMA
 EwmaT <int>                         ewma_cv(FILTER_CV_WEIGHT, 100);
 EwmaT <int>                         ewma_slider(FILTER_POTS_WEIGHT, 100);
+EwmaT <int>                         ewma_center(FILTER_POTS_WEIGHT, 100);
 EwmaT <int>                         ewma_left(FILTER_POTS_WEIGHT, 100);
 EwmaT <int>                         ewma_right(FILTER_POTS_WEIGHT, 100);
 
@@ -47,9 +52,9 @@ Thread                              threadRefresh;
 Thread                              threadLed;
 Thread                              threadConsole;
 
-uint16_t                            raw_cv_input, raw_slider_input, raw_left_input, raw_right_input;
+uint16_t                            raw_cv_input, raw_slider_input, raw_center_input, raw_left_input, raw_right_input;
 uint32_t                            refresh,old_refresh;
-uint32_t                            filtered_raw_cv_input, filtered_raw_slider_input, filtered_raw_left_input, filtered_raw_right_input;
+uint32_t                            filtered_raw_cv_input, filtered_raw_slider_input, filtered_raw_center_input, filtered_raw_left_input, filtered_raw_right_input;
 uint16_t                            center_from_slider;
 uint16_t                            volume, volume_right, volume_left;
 uint16_t                            superdebug;
@@ -69,7 +74,7 @@ void refresh_thread(void)
 void led_thread(void)
 {
     while (true) {
-    //    led.write(((float)volume)/(float)UI16_MAX);
+        led.write(((float)volume)/(float)UI16_MAX);  // TO COMMENT
         ThisThread::sleep_for(BLINKING_RATE);
     }
 }
@@ -89,7 +94,7 @@ void console_thread(void)
 void big_console_thread(void)
 {
     while (true) {
-        printf("CV INPUT: 0x%04X, %05i/UI16_MAX, %fV | OUTPUT: %f\% | SLIDER: %f\%/%f\%, CENTER:%i/%i| LEFT: %f\%/%f\% | RIGHT: %f\%/%f\% | %iHz | %d | %d | %f * CV + %d = %d | %f * (CV - %d) + %d = %d\n",
+        printf("CV INPUT: 0x%04X, %05i/UI16_MAX, %fV | OUTPUT: %f\% | SLIDER: %f\%/%f\%, CENTER:%i/%i| L%d-R%d | CENTER: %f\%/%f\% | LEFT: %f\%/%f\% | RIGHT: %f\%/%f\% | %iHz | %d | %d | %f * CV + %d = %d | %f * (CV - %d) + %d = %d\n",
         raw_cv_input,
         raw_cv_input,
         3.3*((float)raw_cv_input)/((float)UI16_MAX),
@@ -99,6 +104,10 @@ void big_console_thread(void)
         (float)filtered_raw_slider_input / (float)UI16_MAX,
         center_from_slider,
         (uint16_t)CENTER_WIDTH_UI16,
+        but_l_lin_log.read(),
+        but_r_lin_log.read(),
+        center_input.read(),
+        (float)filtered_raw_center_input / (float)UI16_MAX,
         left_input.read(),
         (float)filtered_raw_left_input / (float)UI16_MAX,
         right_input.read(),
@@ -132,22 +141,28 @@ int main()
     volume = 0;
     volume_left = 0;
     volume_right = 0;
-    printf("-- START --");
-    //led.period_ms(10);
+    //printf("-- START --");
+
+    but_r_lin_log.mode(PullUp);
+    but_l_lin_log.mode(PullUp);
+
+    led.period_ms(10); // TO COMMENT
 
     threadRefresh.start(refresh_thread);
     threadLed.start(led_thread);
-    //threadConsole.start(big_console_thread);
-    threadConsole.start(console_thread);
+    threadConsole.start(big_console_thread);  // TO COMMENT
+    //threadConsole.start(console_thread);  // TO COMMENT
 
     while (true) {
         // check inputs
         raw_cv_input = cv_input.read_u16();
         raw_slider_input = slider_input.read_u16();
+        raw_center_input = center_input.read_u16();
         raw_left_input = left_input.read_u16();
         raw_right_input = right_input.read_u16();
 
         filtered_raw_slider_input = ewma_slider.filter(raw_slider_input);
+        filtered_raw_center_input = ewma_center.filter(raw_center_input);
         filtered_raw_left_input = ewma_left.filter(raw_left_input);
         filtered_raw_right_input = ewma_right.filter(raw_right_input);
 
