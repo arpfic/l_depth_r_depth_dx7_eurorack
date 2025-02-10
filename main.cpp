@@ -27,15 +27,17 @@
 #define SLIDER_LENGTH_MINUS_CENTER  (uint16_t)(UI16_MAX - (CENTER_WIDTH_UI16 * 2))
 #define LEFT_SILDER_ADJ             50 // Pour ajuster le point où le plateau recouvre tout à gauche (dépend des valeurs absolues)
 #define RIGHT_SILDER_ADJ            50
+#define SCALE_SLIDER                ((float)(SLIDER_LENGTH_MINUS_CENTER) / (float)(UI16_MAX))
 
-SoftPWM                             led(LED1);  // TO COMMENT
+
+//SoftPWM                             led(LED1);  // TO COMMENT
 AnalogIn                            cv_input(A6); // CV input
 AnalogIn                            slider_input(A2); // SLIDER input
 AnalogIn                            center_input(D3); // POT CENTER input
-AnalogIn                            left_input(A1); // POT R Left input
-AnalogIn                            right_input(A0); // POT L Left input
+AnalogIn                            left_input(A0); // POT Left input
+AnalogIn                            right_input(A1); // POT Right input
 //AnalogOut                         raw_output(PA_4); // DAC 1  // TO COMMENT
-AnalogOut                           filtered_output(PA_5); // DAC 2
+AnalogOut                           filtered_output(PA_4); // DAC 2
 
 DigitalIn                           but_r_lin_log(PB_5); // Lin/Log algo to R depth
 DigitalIn                           but_l_lin_log(PB_4); // Lin/Log algo to L depth
@@ -53,7 +55,7 @@ Thread                              threadLed;
 Thread                              threadConsole;
 
 uint16_t                            raw_cv_input, raw_slider_input, raw_center_input, raw_left_input, raw_right_input;
-uint32_t                            refresh,old_refresh;
+volatile uint32_t                   refresh,old_refresh;
 uint32_t                            filtered_raw_cv_input, filtered_raw_slider_input, filtered_raw_center_input, filtered_raw_left_input, filtered_raw_right_input;
 uint16_t                            center_from_slider;
 uint16_t                            volume, volume_right, volume_left;
@@ -74,7 +76,7 @@ void refresh_thread(void)
 void led_thread(void)
 {
     while (true) {
-        led.write(((float)volume)/(float)UI16_MAX);  // TO COMMENT
+        //led.write(((float)volume)/(float)UI16_MAX);  // TO COMMENT
         ThisThread::sleep_for(BLINKING_RATE);
     }
 }
@@ -94,7 +96,7 @@ void console_thread(void)
 void big_console_thread(void)
 {
     while (true) {
-        printf("CV INPUT: 0x%04X, %05i/UI16_MAX, %fV | OUTPUT: %f\% | SLIDER: %f\%/%f\%, CENTER:%i/%i| L%d-R%d | CENTER: %f\%/%f\% | LEFT: %f\%/%f\% | RIGHT: %f\%/%f\% | %iHz | %d | %d | %f * CV + %d = %d | %f * (CV - %d) + %d = %d\n",
+        printf("CV INPUT: 0x%04X, %05i/UI16_MAX, %fV | OUTPUT: %f | SLIDER: %f/%f, CENTER:%i/%i| L%d-R%d | CENTER: %f/%f | LEFT: %f/%f | RIGHT: %f/%f | %iHz | %d | %d | %f * CV + %d = %d | %f * (CV - %d) + %d = %d\n",
         raw_cv_input,
         raw_cv_input,
         3.3*((float)raw_cv_input)/((float)UI16_MAX),
@@ -146,10 +148,10 @@ int main()
     but_r_lin_log.mode(PullUp);
     but_l_lin_log.mode(PullUp);
 
-    led.period_ms(10); // TO COMMENT
+    //led.period_ms(10); // TO COMMENT
 
     threadRefresh.start(refresh_thread);
-    threadLed.start(led_thread);
+    //threadLed.start(led_thread);
     threadConsole.start(big_console_thread);  // TO COMMENT
     //threadConsole.start(console_thread);  // TO COMMENT
 
@@ -169,7 +171,7 @@ int main()
         filtered_raw_cv_input = ewma_cv.filter(raw_cv_input); // 2nd DAC, filtered version
         filtered_output.write_u16(volume);
 
-        center_from_slider = CENTER_WIDTH_UI16 + (uint16_t)((float)filtered_raw_slider_input * ((float)SLIDER_LENGTH_MINUS_CENTER / (float)UI16_MAX));
+        center_from_slider = CENTER_WIDTH_UI16 + (uint16_t)(filtered_raw_slider_input * SCALE_SLIDER);
         left_slide_point = center_from_slider - CENTER_WIDTH_UI16;
         right_slide_point = center_from_slider + CENTER_WIDTH_UI16;
 
@@ -177,16 +179,16 @@ int main()
             superdebug = 1;
             left_cv_calc = ((float)(UI16_MAX - filtered_raw_left_input)) / ((float)(left_slide_point));
             volume_left = ((uint16_t)(left_cv_calc * (float)filtered_raw_cv_input)) + filtered_raw_left_input;
-            volume = volume_left;
+            volume = (uint16_t)((float)volume_left * ((float)filtered_raw_center_input / (float)UI16_MAX));
             volume_right = 0;
         } else if (filtered_raw_cv_input > ((center_from_slider + CENTER_WIDTH_UI16))) {
             superdebug = 2;
             right_cv_calc = -((float)(0 - (filtered_raw_right_input - UI16_MAX)) / (float)(UI16_MAX - (right_slide_point)));
             volume_right = ((uint16_t)(right_cv_calc * (float)(filtered_raw_cv_input - right_slide_point))) + UI16_MAX;
-            volume = volume_right;
+            volume = (uint16_t)((float)volume_right * ((float)filtered_raw_center_input / (float)UI16_MAX));
             volume_left = 0;
         } else {
-            volume = UI16_MAX;
+            volume = filtered_raw_center_input;
             volume_left = 0;
             volume_right = 0;
             superdebug = 0;
