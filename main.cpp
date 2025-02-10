@@ -85,8 +85,8 @@ void console_thread(void)
 {
     while (true) {
         printf("%iHz | %f\%\n",
-        old_refresh,
-        filtered_output.read()
+        old_refresh
+        //filtered_output.read()
         );
 
         ThisThread::sleep_for(CONSOLE_RATE);
@@ -130,7 +130,6 @@ void big_console_thread(void)
     }
 }
 
-
 int main()
 {
     old_refresh = 0;
@@ -152,8 +151,8 @@ int main()
 
     threadRefresh.start(refresh_thread);
     //threadLed.start(led_thread);
-    threadConsole.start(big_console_thread);  // TO COMMENT
-    //threadConsole.start(console_thread);  // TO COMMENT
+    //threadConsole.start(big_console_thread);  // TO COMMENT
+    threadConsole.start(console_thread);  // TO COMMENT
 
     while (true) {
         // check inputs
@@ -168,26 +167,41 @@ int main()
         filtered_raw_left_input = ewma_left.filter(raw_left_input);
         filtered_raw_right_input = ewma_right.filter(raw_right_input);
 
-        filtered_raw_cv_input = ewma_cv.filter(raw_cv_input); // 2nd DAC, filtered version
+        //filtered_raw_cv_input = ewma_cv.filter(raw_cv_input); // 2nd DAC, filtered version
         filtered_output.write_u16(volume);
 
         center_from_slider = CENTER_WIDTH_UI16 + (uint16_t)(filtered_raw_slider_input * SCALE_SLIDER);
         left_slide_point = center_from_slider - CENTER_WIDTH_UI16;
         right_slide_point = center_from_slider + CENTER_WIDTH_UI16;
 
-        if (filtered_raw_cv_input < ((center_from_slider - CENTER_WIDTH_UI16))) {
+        // Calcul commun : conversion unique pour le centre
+        float center_scale = float(filtered_raw_center_input) / float(UI16_MAX);
+
+        if (raw_cv_input < (center_from_slider - CENTER_WIDTH_UI16)) {
             superdebug = 1;
-            left_cv_calc = ((float)(UI16_MAX - filtered_raw_left_input)) / ((float)(left_slide_point));
-            volume_left = ((uint16_t)(left_cv_calc * (float)filtered_raw_cv_input)) + filtered_raw_left_input;
-            volume = (uint16_t)((float)volume_left * ((float)filtered_raw_center_input / (float)UI16_MAX));
+            
+            // Conversion du cv_input en float une seule fois
+            float f_cv_input = float(raw_cv_input);
+            // Calcul du facteur pour la branche gauche
+            float left_scale = float(UI16_MAX - filtered_raw_left_input) / float(left_slide_point);
+            
+            volume_left = uint16_t(left_scale * f_cv_input) + filtered_raw_left_input;
+            volume = uint16_t(float(volume_left) * center_scale);
             volume_right = 0;
-        } else if (filtered_raw_cv_input > ((center_from_slider + CENTER_WIDTH_UI16))) {
+        }
+        else if (raw_cv_input > (center_from_slider + CENTER_WIDTH_UI16)) {
             superdebug = 2;
-            right_cv_calc = -((float)(0 - (filtered_raw_right_input - UI16_MAX)) / (float)(UI16_MAX - (right_slide_point)));
-            volume_right = ((uint16_t)(right_cv_calc * (float)(filtered_raw_cv_input - right_slide_point))) + UI16_MAX;
-            volume = (uint16_t)((float)volume_right * ((float)filtered_raw_center_input / (float)UI16_MAX));
+            
+            // Calcul du facteur pour la branche droite
+            float right_scale = float(UI16_MAX - filtered_raw_right_input) / float(UI16_MAX - right_slide_point);
+            // Calcul de la différence entre CV et le point droit
+            float diff_cv = float(raw_cv_input - right_slide_point);
+            
+            volume_right = UI16_MAX - uint16_t(right_scale * diff_cv);
+            volume = uint16_t(float(volume_right) * center_scale);
             volume_left = 0;
-        } else {
+        }
+        else {
             volume = filtered_raw_center_input;
             volume_left = 0;
             volume_right = 0;
