@@ -4,7 +4,7 @@
 #include <cmath>
 
 // ===================== DEBUG MODE MACRO =====================
-#define DEBUG_LINLOG 1  // Set to 1 to enable double-calculation & extended debug
+#define DEBUG_LINLOG 0  // Set to 1 to enable extended debug
 
 // ===================== Constants & LUT Config =====================
 static const float UI16_MAX_F   = 65535.0f;
@@ -265,7 +265,7 @@ int main()
             old_refresh = refresh;
             refresh = 0;
         }
-        if ((nowMs - lastDbgMs) >= 1000) {
+        if ((nowMs - lastDbgMs) >= 50) {
             lastDbgMs = nowMs;
             big_console_debug();
         }
