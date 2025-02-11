@@ -4,7 +4,9 @@
 #include <cmath>
 
 // ===================== DEBUG MODE MACRO =====================
-#define DEBUG_LINLOG 0  // Set to 1 to enable extended debug
+// Set to 1 to enable extended debug
+// Then run python extract_and_plot.py with the logs :)
+#define DEBUG_LINLOG 0
 
 // ===================== Constants & LUT Config =====================
 static const float UI16_MAX_F   = 65535.0f;
@@ -34,11 +36,15 @@ inline float ewma_filter_float(float in, float out_prev, float alpha, bool &init
 }
 
 // Build LUT => y = 1 - exp(-c*x)
+// up = (1.0f - expf(-c*x)) / (1.0f - expf(-c));
+// because we need to be exactly at 1 in center
 static void buildLUT(float c)
 {
-    for (int i = 0; i <= LUT_SIZE; i++) {
-        float x = (float)i / (float)LUT_SIZE;
-        lutExpUp[i] = 1.0f - expf(-c * x);
+    for (int i=0; i<= LUT_SIZE; i++){
+        float x = (float)i / LUT_SIZE;
+        float denom = 1.0f - expf(-c);
+        float up = (1.0f - expf(-c*x)) / denom;
+        lutExpUp[i] = up;
     }
 }
 
