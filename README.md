@@ -4,7 +4,7 @@ This folder contains the hardware design and software for a **Left & Right (L&R)
 
 ## Hardware
 
-- **Eurorack** format PCB design (see the [`Hardware`](Hardware/) folder).
+- **Eurorack** (+12/-12V) format (see the [`Hardware`](Hardware/) folder).
 - Exposes:
   - **CV input** for the main signal.
   - Pots/sliders for left/right depth and a central “plateau” adjustment.
