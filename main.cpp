@@ -12,7 +12,7 @@
 #include <cmath>
 
 // ===================== DEBUG MODE MACRO =====================
-#define DEBUG_LINLOG 1  // set to 1 to enable extended debug prints
+#define DEBUG_LINLOG 0  // set to 1 to enable extended debug prints
 
 // ===================== Constants & LUT Config =====================
 static const float UI16_MAX_F   = 65535.0f;
@@ -194,10 +194,12 @@ static void big_console_debug()
 {
     float cv_volt = (cv_raw_f / UI16_MAX_F) * VREF;
  printf(
-        "CV=%.1f/%.2fV vol=%u L=%u/%f R=%u/%f Hz=%lu\n",
+        "CV=%.1f/%.2fV vol=%u C=%u/%f L=%u/%f R=%u/%f Hz=%lu\n",
         cv_raw_f,
         cv_volt,
         volume,
+        (uint16_t)center_fil_f,
+        (float)center_fil_f / UI16_MAX_F,
         volume_left,
         (float)volume_left / UI16_MAX_F,
         volume_right,
