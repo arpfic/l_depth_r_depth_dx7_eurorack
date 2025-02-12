@@ -1,12 +1,9 @@
 /*
- * Linear and exponential LUT-based shaping on left/right volumes,
- * with a "plateau" center zone. By default, the code runs in a high-speed loop,
- * reading ADCs, applying EWMA filtering to pot inputs, then applying either
- * linear or exponential shaping on each side (controlled by digital inputs).
- *
- * If DEBUG_LINLOG == 1, additional debug prints are performed, showing
- * the iteration frequency etc. The LUT is normalized so that at ratio=1,
- * we reach exactly 1.0 (no leftover mismatch).
+ * DX7 like L&R Depth.
+ * Linear & exponential LUT-based shaping on left/right volumes,
+ * with a center "plateau" zone. If the side pot is larger than
+ * the center pot, we invert that side’s slope, allowing \_/
+ * shapes as well as /¯\ shapes.
  */
 
 #include "mbed.h"
@@ -15,16 +12,14 @@
 #include <cmath>
 
 // ===================== DEBUG MODE MACRO =====================
-// Set to 1 to enable extended debug
-// Then you can parse logs with a Python script if desired.
-#define DEBUG_LINLOG 0
+#define DEBUG_LINLOG 1  // set to 1 to enable extended debug prints
 
 // ===================== Constants & LUT Config =====================
-static const float UI16_MAX_F   = 65535.0f;    // 16-bit max as float
-static const float CENTER_WIDTH = 0.1f;        // "Plateau" fraction
-static const float VREF         = 3.3f;        // Voltage reference for debug display
+static const float UI16_MAX_F   = 65535.0f;
+static const float CENTER_WIDTH = 0.1f;  // fraction of [0..1]
+static const float VREF         = 3.3f;  // for debug display
 
-// Compute half the plateau in float range
+// Half the plateau (in float range)
 static const float center_width_float = CENTER_WIDTH * UI16_MAX_F * 0.5f;
 
 // Remaining slider range after removing the plateau from both ends
@@ -33,9 +28,9 @@ static const float slider_length_minus_center_float =
 
 // LUT resolution
 #define LUT_SIZE 2048
-static float lutExpUp[LUT_SIZE + 1]; // Single LUT array for "up" shape
+static float lutExpUp[LUT_SIZE + 1];
 
-// Shaping constant: adjust for steeper or gentler exponential curve
+// Shaping constant for exponential slope
 static const float SHAPE_C = 4.0f;
 
 // ===================== EWMA for pot smoothing =====================
@@ -49,9 +44,8 @@ inline float ewma_filter_float(float in, float out_prev, float alpha, bool &init
 }
 
 /*
- * Build the LUT:
+ * Build the LUT so at x=0 => 0, at x=1 => 1:
  *   y = (1 - exp(-c*x)) / (1 - exp(-c))
- * ensures at x=0 => y=0, and x=1 => y=1
  */
 static void buildLUT(float c)
 {
@@ -63,7 +57,9 @@ static void buildLUT(float c)
     }
 }
 
-// ===================== LUT interpolation =====================
+/*
+ * Interpolate in lutExpUp[] for x in [0..1].
+ */
 inline float interpolateLUT(float x)
 {
     if (x < 0.f) x = 0.f;
@@ -81,104 +77,105 @@ inline float interpolateLUT(float x)
 
 // ===================== Shaping Functions =====================
 /*
- * Left side shape: linear (ratio) or exponential (LUT).
+ * shapeLeft(ratio, useLog):
+ *  - if useLog => LUT(ratio)
+ *  - else => ratio (linear)
  */
-inline float shapeLeftLUT(float ratio, bool useLog)
+inline float shapeLeft(float ratio, bool useLog)
 {
-    if (!useLog) {
-        // Linear
-        return ratio;
-    } else {
-        // Exponential up
-        return interpolateLUT(ratio);
-    }
+    return useLog ? interpolateLUT(ratio) : ratio;
 }
 
 /*
- * Right side shape: invert linear or invert exp by sampling LUT at (1 - ratio).
+ * shapeRight(ratio, useLog):
+ *  - if useLog => LUT(1-ratio) => invert exp
+ *  - else => 1-ratio => invert linear
  */
-inline float shapeRightLUT(float ratio, bool useLog)
+inline float shapeRight(float ratio, bool useLog)
 {
-    if (!useLog) {
-        // Linear invert => 1 - ratio
-        return 1.0f - ratio;
+    return useLog ? interpolateLUT(1.f - ratio) : (1.f - ratio);
+}
+
+// ===================== computeVolume Helpers =====================
+/**
+ * @brief computeVolumeLeft
+ *  - If center > left pot => we do the "usual" slope from left pot up to center pot,
+ *    or up to a higher amplitude. 
+ *  - If center < left pot => we invert the slope so it goes downward from left pot to center.
+ *    e.g. \ shape.
+ */
+inline uint16_t computeVolumeLeft(float ratio, float center_val, float left_val, bool useLog)
+{
+    // If center is bigger, offset = left_val, range = (center_val - left_val), shaping is normal
+    // If left_val is bigger, offset = center_val, range = (left_val - center_val), shaping is "inverted"
+    bool sideIsBigger = (left_val > center_val);
+
+    float offset = sideIsBigger ? center_val : left_val;
+    float range  = fabsf(center_val - left_val);
+
+    // shape factor
+    float shaped = shapeLeft(ratio, useLog);
+    // if side is bigger => shaped=0 => center_val, shaped=1 => left_val => reversed slope
+    // so if sideIsBigger => final = offset + (1 - shaped)*range
+    // else => final = offset + shaped*range
+    float final;
+    if (sideIsBigger) {
+        final = offset + (1.f - shaped) * range;
     } else {
-        // Invert exponential => use LUT(1 - ratio)
-        return interpolateLUT(1.0f - ratio);
+        final = offset + shaped * range;
     }
-}
 
-// ===================== computeVolume() helpers =====================
-/**
- * Compute the final scaled volume on the left side.
- *
- * ratio: [0..1]
- * offset: e.g. left_fil_f
- * range: (65535 - left_fil_f)
- * centerScale: factor from center pot
- * useLog: true => exponential, false => linear
- */
-inline uint16_t computeVolumeLeft(float ratio, float offset, float range, float centerScale, bool useLog)
-{
-    float shaped = shapeLeftLUT(ratio, useLog);
-    float volume_f = offset + shaped * range;
-    float volumeScaled_f = volume_f * centerScale;
-
-    if (volumeScaled_f < 0.f) {
-        volumeScaled_f = 0.f;
-    } else if (volumeScaled_f > UI16_MAX_F) {
-        volumeScaled_f = UI16_MAX_F;
-    }
-    return (uint16_t)volumeScaled_f;
+    // clamp
+    if (final < 0.f) final = 0.f;
+    if (final > UI16_MAX_F) final = UI16_MAX_F;
+    return (uint16_t)(final);
 }
 
 /**
- * Compute the final scaled volume on the right side.
+ * @brief computeVolumeRight
+ * Similar idea but for the right pot vs. center pot.
  */
-inline uint16_t computeVolumeRight(float ratio, float offset, float range, float centerScale, bool useLog)
+inline uint16_t computeVolumeRight(float ratio, float center_val, float right_val, bool useLog)
 {
-    float shaped = shapeRightLUT(ratio, useLog);
-    float volume_f = offset + shaped * range;
+    bool sideIsBigger = (right_val > center_val);
 
-    if (volume_f < 0.f) {
-        volume_f = 0.f;
-    }
-    if (volume_f > UI16_MAX_F) {
-        volume_f = UI16_MAX_F;
+    float offset = sideIsBigger ? center_val : right_val;
+    float range  = fabsf(center_val - right_val);
+
+    float shaped = shapeRight(ratio, useLog);
+    // If right_val is bigger => final= offset+(1 - shaped)*range
+    // else => offset+ shaped*range
+    float final;
+    if (sideIsBigger) {
+        final = offset + (1.f - shaped) * range;
+    } else {
+        final = offset + shaped * range;
     }
 
-    float volumeScaled_f = volume_f * centerScale;
-    if (volumeScaled_f < 0.f) {
-        volumeScaled_f = 0.f;
-    }
-    if (volumeScaled_f > UI16_MAX_F) {
-        volumeScaled_f = UI16_MAX_F;
-    }
-    return (uint16_t)volumeScaled_f;
+    if (final < 0.f) final = 0.f;
+    if (final > UI16_MAX_F) final = UI16_MAX_F;
+    return (uint16_t)(final);
 }
 
 // ===================== Globals & MBED objects =====================
 static const float ALPHA_POTS = 0.06f;
 
-// Raw/filt values
-float cv_raw_f       = 0.0f;
-float slider_raw_f   = 0.0f, slider_fil_f   = 0.0f; bool init_slider   = false;
-float center_raw_f   = 0.0f, center_fil_f   = 0.0f; bool init_center   = false;
-float left_raw_f     = 0.0f, left_fil_f     = 0.0f; bool init_left     = false;
-float right_raw_f    = 0.0f, right_fil_f    = 0.0f; bool init_right    = false;
+float cv_raw_f     = 0.0f;
+float slider_raw_f = 0.0f, slider_fil_f = 0.0f; bool init_slider = false;
+float center_raw_f = 0.0f, center_fil_f = 0.0f; bool init_center = false;
+float left_raw_f   = 0.0f, left_fil_f   = 0.0f; bool init_left   = false;
+float right_raw_f  = 0.0f, right_fil_f  = 0.0f; bool init_right  = false;
 
-// Volumes
+// Output volumes
 uint16_t volume = 0, volume_left = 0, volume_right = 0;
 
-// "Plateau" boundaries
 float center_from_slider_f = 0.0f;
 float left_slide_point_f   = 0.0f;
 float right_slide_point_f  = 0.0f;
 
-// For iteration measurement
 volatile uint32_t refresh = 0, old_refresh = 0;
 
-// Analog/digital IO
+// I/O
 AnalogIn  cv_input(A6);
 AnalogIn  slider_input(A2);
 AnalogIn  center_input(D3);
@@ -190,14 +187,13 @@ AnalogOut filtered_output(PA_4);
 DigitalIn but_r_lin_log(PB_5);
 DigitalIn but_l_lin_log(PB_4);
 
-// Timer
 Timer t;
 
-// ===================== Debug function =====================
+#if DEBUG_LINLOG
 static void big_console_debug()
 {
     float cv_volt = (cv_raw_f / UI16_MAX_F) * VREF;
-    printf(
+ printf(
         "CV=%.1f/%.2fV vol=%u L=%u/%f R=%u/%f Hz=%lu\n",
         cv_raw_f,
         cv_volt,
@@ -210,6 +206,7 @@ static void big_console_debug()
     );
     fflush(stdout);
 }
+#endif
 
 // ===================== MAIN =====================
 int main()
@@ -220,41 +217,39 @@ int main()
     t.start();
     buildLUT(SHAPE_C);
 
+#if DEBUG_LINLOG
     uint32_t lastDbgMs = 0;
     uint32_t lastRefMs = 0;
+#endif
 
     while (true) {
 
-        // 1) Read raw ADC & convert to [0..65535]
-        cv_raw_f      = cv_input.read()     * UI16_MAX_F;
-        slider_raw_f  = slider_input.read() * UI16_MAX_F;
-        center_raw_f  = center_input.read() * UI16_MAX_F;
-        left_raw_f    = left_input.read()   * UI16_MAX_F;
-        right_raw_f   = right_input.read()  * UI16_MAX_F;
+        // 1) ADC readings => [0..65535]
+        cv_raw_f     = cv_input.read()     * UI16_MAX_F;
+        slider_raw_f = slider_input.read() * UI16_MAX_F;
+        center_raw_f = center_input.read() * UI16_MAX_F;
+        left_raw_f   = left_input.read()   * UI16_MAX_F;
+        right_raw_f  = right_input.read()  * UI16_MAX_F;
 
-        // 2) Filter pot values via EWMA
+        // 2) Filter pot values (EWMA)
         slider_fil_f = ewma_filter_float(slider_raw_f, slider_fil_f, ALPHA_POTS, init_slider);
         center_fil_f = ewma_filter_float(center_raw_f, center_fil_f, ALPHA_POTS, init_center);
         left_fil_f   = ewma_filter_float(left_raw_f,   left_fil_f,   ALPHA_POTS, init_left);
         right_fil_f  = ewma_filter_float(right_raw_f,  right_fil_f,  ALPHA_POTS, init_right);
 
-        // 3) Compute plateau boundaries from slider
+        // 3) Plateau boundaries from slider
         float fraction_slider = slider_fil_f / UI16_MAX_F;
         center_from_slider_f  = center_width_float + fraction_slider * slider_length_minus_center_float;
         left_slide_point_f    = center_from_slider_f - center_width_float;
         right_slide_point_f   = center_from_slider_f + center_width_float;
 
-        // Factor from center pot
-        float center_scale = center_fil_f / UI16_MAX_F;
-
-        // Decide shaping:
-        // e.g. if read()==1 => use exponential
+        // 4) Decide shaping from buttons
         bool useLogLeft  = (but_l_lin_log.read() == 1);
         bool useLogRight = (but_r_lin_log.read() == 1);
 
-        // 4) Plateau logic
+        // 5) Main logic
         if (cv_raw_f < left_slide_point_f) {
-            // -- LEFT ZONE --
+            // LEFT ZONE => ratio in [0..1]
             float ratio_l = 0.f;
             if (left_slide_point_f > 0.f) {
                 ratio_l = cv_raw_f / left_slide_point_f;
@@ -262,50 +257,41 @@ int main()
             if (ratio_l < 0.f) ratio_l = 0.f;
             if (ratio_l > 1.f) ratio_l = 1.f;
 
-            float offset_l = left_fil_f;
-            float range_l  = (UI16_MAX_F - left_fil_f);
-
-            volume_left  = computeVolumeLeft(ratio_l, offset_l, range_l, center_scale, useLogLeft);
-            volume       = volume_left;
+            volume_left = computeVolumeLeft(ratio_l, center_fil_f, left_fil_f, useLogLeft);
+            volume = volume_left;
             volume_right = 0;
-
-        } else if (cv_raw_f > right_slide_point_f) {
-            // -- RIGHT ZONE --
+        }
+        else if (cv_raw_f > right_slide_point_f) {
+            // RIGHT ZONE => ratio in [0..1]
             float diff_cv = cv_raw_f - right_slide_point_f;
             float denom_r = (UI16_MAX_F - right_slide_point_f);
             float ratio_r = (denom_r > 0.f) ? (diff_cv / denom_r) : 0.f;
             if (ratio_r < 0.f) ratio_r = 0.f;
             if (ratio_r > 1.f) ratio_r = 1.f;
 
-            float offset_r = right_fil_f;
-            float range_r  = (UI16_MAX_F - right_fil_f);
-
-            volume_right = computeVolumeRight(ratio_r, offset_r, range_r, center_scale, useLogRight);
-            volume       = volume_right;
-            volume_left  = 0;
-
-        } else {
-            // -- CENTER ZONE --
+            volume_right = computeVolumeRight(ratio_r, center_fil_f, right_fil_f, useLogRight);
+            volume = volume_right;
+            volume_left = 0;
+        }
+        else {
+            // CENTER ZONE => volume = center pot
             volume       = (uint16_t)center_fil_f;
             volume_left  = 0;
             volume_right = 0;
         }
 
-        // 5) Write to DAC
+        // 6) DAC output
         filtered_output.write_u16(volume);
 
 #if DEBUG_LINLOG
-        // 6) Count iterations
+        // Optional debug/measurement
         refresh++;
-
-        // 7) Timer for stats
         uint32_t nowMs = t.read_ms();
         if ((nowMs - lastRefMs) >= 1000) {
             lastRefMs = nowMs;
             old_refresh = refresh;
             refresh = 0;
         }
-        // Print debug e.g. every 50 ms
         if ((nowMs - lastDbgMs) >= 50) {
             lastDbgMs = nowMs;
             big_console_debug();
